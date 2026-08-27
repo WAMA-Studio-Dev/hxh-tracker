@@ -51,7 +51,7 @@ app/                 Next.js App Router (layout, página, manifest, favicon)
 components/          UI (hero, controles, temporadas, sync, QR, rewatch, export…)
 lib/                 Lógica de datos: temporadas, ritmo/fechas, sync-id, Supabase, hook de progreso
 public/sw.js         Service worker básico (cache-first del shell, offline)
-scripts/             Generador de iconos PWA (pngjs, sin dependencias nativas)
+scripts/             Generador de iconos PWA (rasteriza public/icon.svg con sharp)
 supabase/schema.sql  Tabla + RLS + Realtime
 ```
 

@@ -1,121 +1,90 @@
-// Draws the Hunter License-style mark (hexagon + aura ring) as raw pixels via
-// pngjs — no native/canvas dependency, keeps the toolchain light.
-import { PNG } from "pngjs";
-import { mkdirSync, writeFileSync } from "node:fs";
+// Rasterizes public/icon.svg (the source of truth for the app icon) into every
+// PWA/browser icon asset via sharp.
+import sharp from "sharp";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 
-const BG = [10, 13, 12];
-const RING = [16, 185, 129];
-const DOT = [16, 185, 129];
-
-function hexPath(cx, cy, r) {
-  const pts = [];
-  for (let i = 0; i < 6; i++) {
-    const angle = (Math.PI / 180) * (60 * i - 90);
-    pts.push([cx + r * Math.cos(angle), cy + r * Math.sin(angle)]);
-  }
-  return pts;
-}
-
-function pointInPolygon(x, y, pts) {
-  let inside = false;
-  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-    const [xi, yi] = pts[i];
-    const [xj, yj] = pts[j];
-    const intersect = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
-    if (intersect) inside = !inside;
-  }
-  return inside;
-}
-
-function distToSegment(px, py, ax, ay, bx, by) {
-  const abx = bx - ax;
-  const aby = by - ay;
-  const t = Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / (abx * abx + aby * aby || 1)));
-  const cx = ax + t * abx;
-  const cy = ay + t * aby;
-  return Math.hypot(px - cx, py - cy);
-}
-
-function distToPolygonOutline(x, y, pts) {
-  let min = Infinity;
-  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-    min = Math.min(min, distToSegment(x, y, pts[i][0], pts[i][1], pts[j][0], pts[j][1]));
-  }
-  return min;
-}
-
-function blend(dst, src, alpha) {
-  return dst.map((c, i) => Math.round(c * (1 - alpha) + src[i] * alpha));
-}
-
-function drawIcon(size, { maskable = false } = {}) {
-  const png = new PNG({ width: size, height: size });
-  const cx = size / 2;
-  const cy = size / 2;
-  const cornerRadius = size * 0.22;
-  // Maskable icons need ~safe-zone padding (content within the inner 80% circle).
-  const scale = maskable ? 0.62 : 0.82;
-  const ringR = (size / 2) * scale;
-  const hexR = ringR * 0.72;
-  const dotR = size * 0.045;
-  const hex = hexPath(cx, cy, hexR);
-
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const idx = (size * y + x) << 2;
-
-      // rounded-square background clip
-      const dx = Math.max(Math.abs(x - cx) - (size / 2 - cornerRadius), 0);
-      const dy = Math.max(Math.abs(y - cy) - (size / 2 - cornerRadius), 0);
-      const outsideCorner = Math.hypot(dx, dy) > cornerRadius;
-      const insideBounds = maskable ? true : !outsideCorner;
-
-      let color = BG;
-      let alpha = insideBounds ? 1 : 0;
-
-      if (insideBounds) {
-        const distFromCenter = Math.hypot(x - cx, y - cy);
-        const ringDist = Math.abs(distFromCenter - ringR);
-        const ringWidth = size * 0.014;
-        if (ringDist < ringWidth) {
-          const a = 1 - ringDist / ringWidth;
-          color = blend(BG, RING, Math.min(1, a) * 0.75);
-        }
-
-        const hexDist = distToPolygonOutline(x, y, hex);
-        const hexStroke = size * 0.018;
-        if (hexDist < hexStroke) {
-          const a = 1 - hexDist / hexStroke;
-          color = blend(color, RING, Math.min(1, a));
-        }
-
-        if (distFromCenter < dotR) {
-          const a = Math.min(1, (dotR - distFromCenter) / (dotR * 0.4) + 0.3);
-          color = blend(color, DOT, Math.min(1, a));
-        }
-      }
-
-      png.data[idx] = color[0];
-      png.data[idx + 1] = color[1];
-      png.data[idx + 2] = color[2];
-      png.data[idx + 3] = Math.round(alpha * 255);
-    }
-  }
-
-  return PNG.sync.write(png);
-}
-
+const svgPath = join(ROOT, "public", "icon.svg");
 const iconsDir = join(ROOT, "public", "icons");
 mkdirSync(iconsDir, { recursive: true });
 
-writeFileSync(join(iconsDir, "icon-192.png"), drawIcon(192));
-writeFileSync(join(iconsDir, "icon-512.png"), drawIcon(512));
-writeFileSync(join(iconsDir, "icon-maskable-512.png"), drawIcon(512, { maskable: true }));
-writeFileSync(join(ROOT, "public", "apple-touch-icon.png"), drawIcon(180));
+const baseSvg = readFileSync(svgPath, "utf8");
 
-console.log("Icons generated in public/icons and public/apple-touch-icon.png");
+// Maskable variant: full-bleed square background (no corner radius, edge-to-edge)
+// with the glyph scaled down + centered so it stays inside the ~80%-diameter safe circle.
+const maskableSvg = `
+<svg width="512" height="512" viewBox="0 0 380 380" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<linearGradient id="bg2" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0%" stop-color="#0f1715"/>
+<stop offset="100%" stop-color="#0a0d0c"/>
+</linearGradient>
+</defs>
+<rect x="0" y="0" width="380" height="380" fill="url(#bg2)"/>
+<g transform="translate(190,190) scale(0.72) translate(-190,-190)">
+<path d="M55 60 L150 200 L60 300" fill="none" stroke="#e8e6e0" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M325 60 L230 200 L320 300" fill="none" stroke="#e8e6e0" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+<polygon points="190,110 238,190 190,270 142,190" fill="#10b981" stroke="#059669" stroke-width="4"/>
+<polygon points="190,142 214,190 190,238 166,190" fill="#0a0d0c" opacity="0.55"/>
+<circle cx="190" cy="190" r="7" fill="#f59e0b"/>
+</g>
+</svg>
+`;
+
+function renderPng(svg, size, outPath) {
+  return sharp(Buffer.from(svg), { density: 384 }).resize(size, size).png().toFile(outPath);
+}
+
+function buildIco(pngBuffers, outPath) {
+  const count = pngBuffers.length;
+  let offset = 6 + 16 * count;
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(0, 0); // reserved
+  header.writeUInt16LE(1, 2); // type: icon
+  header.writeUInt16LE(count, 4); // image count
+
+  const dirEntries = [];
+  const imageBuffers = [];
+  for (const { size, buffer } of pngBuffers) {
+    const entry = Buffer.alloc(16);
+    entry.writeUInt8(size >= 256 ? 0 : size, 0); // width
+    entry.writeUInt8(size >= 256 ? 0 : size, 1); // height
+    entry.writeUInt8(0, 2); // color count
+    entry.writeUInt8(0, 3); // reserved
+    entry.writeUInt16LE(1, 4); // planes
+    entry.writeUInt16LE(32, 6); // bit count
+    entry.writeUInt32LE(buffer.length, 8); // bytes in resource
+    entry.writeUInt32LE(offset, 12); // offset
+    offset += buffer.length;
+    dirEntries.push(entry);
+    imageBuffers.push(buffer);
+  }
+
+  writeFileSync(outPath, Buffer.concat([header, ...dirEntries, ...imageBuffers]));
+}
+
+async function main() {
+  await renderPng(baseSvg, 192, join(iconsDir, "icon-192.png"));
+  await renderPng(baseSvg, 512, join(iconsDir, "icon-512.png"));
+  await renderPng(baseSvg, 180, join(ROOT, "public", "apple-touch-icon.png"));
+  await renderPng(maskableSvg, 512, join(iconsDir, "icon-maskable-512.png"));
+
+  const icoSizes = [16, 32, 48];
+  const pngBuffers = [];
+  for (const size of icoSizes) {
+    const buffer = await sharp(Buffer.from(baseSvg), { density: 384 }).resize(size, size).png().toBuffer();
+    pngBuffers.push({ size, buffer });
+  }
+  buildIco(pngBuffers, join(ROOT, "public", "favicon.ico"));
+
+  console.log("Icons generated from public/icon.svg: public/icons/*, public/apple-touch-icon.png, public/favicon.ico");
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
